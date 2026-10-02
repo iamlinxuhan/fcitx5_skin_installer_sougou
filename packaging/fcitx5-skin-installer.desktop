@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Fcitx5 Sogou Skin Installer
+Name[zh_CN]=fcitx5 搜狗皮肤安装器
+GenericName=Input Method Theme Installer
+GenericName[zh_CN]=输入法主题安装器
+Comment=Install Sogou .ssf skins as fcitx5 themes
+Comment[zh_CN]=把搜狗输入法的 .ssf 皮肤安装成 fcitx5 主题
+Exec=fcitx5-skin-installer
+Icon=fcitx5-skin-installer
+Terminal=false
+Categories=Settings;DesktopSettings;Qt;
+Keywords=fcitx5;fcitx;theme;skin;sogou;ssf;input method;
+Keywords[zh_CN]=输入法;皮肤;主题;搜狗;
+StartupNotify=true
+StartupWMClass=fcitx5-skin-installer

@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# AppImage 构建中间产物
+squashfs-root/
+*.AppImage
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+.DS_Store

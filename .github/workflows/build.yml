@@ -1,0 +1,180 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: fcitx5-skin-installer
+  PYTHON_VERSION: "3.12"
+  # ssfconv 未发布到 PyPI，构建时从上游按 commit 固定拉取
+  SSFCONV_SPEC: "ssfconv @ git+https://github.com/RadND/ssfconv.git@9fdbed9cb80907044917e53383216952675f1037"
+
+jobs:
+  # ---------------------------------------------------------------- 检查
+  test:
+    name: 代码检查与单元测试
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "$SSFCONV_SPEC"
+
+      - name: 语法检查
+        run: python -m compileall -q skin_installer.py fcitx5_skin_installer tests
+
+      - name: 单元测试
+        run: python tests/test_converter.py
+
+      - name: 无显示器下验证 GUI 可构建
+        run: |
+          PLUGINS=$(python -c "import PyQt5, os; print(os.path.join(os.path.dirname(PyQt5.__file__), 'Qt5', 'plugins', 'platforms'))")
+          QT_QPA_PLATFORM_PLUGIN_PATH="$PLUGINS" \
+          QT_QPA_PLATFORM=offscreen \
+          python -c "
+          import sys
+          from PyQt5.QtWidgets import QApplication
+          app = QApplication(sys.argv)
+          from fcitx5_skin_installer.main_window import MainWindow
+          from fcitx5_skin_installer.resources import app_icon
+          w = MainWindow()
+          assert w.btn_install.isEnabled() is False, '空列表时不应允许安装'
+          assert not app_icon().isNull(), '图标未加载'
+          print('GUI 构建正常:', w.windowTitle())
+          "
+
+  # ---------------------------------------------------------------- 构建
+  build:
+    name: 构建 ${{ matrix.arch }}
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: 安装 Qt 运行库
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
+            libdbus-1-3 libfontconfig1 desktop-file-utils file
+
+      - name: 安装构建依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+          pip install "$SSFCONV_SPEC"
+
+      - name: 解析版本号
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0+${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "版本: $VERSION"
+
+      # 不用 --onefile：numpy/Pillow 体积大，每次启动都要解压到临时目录，
+      # 冷启动明显变慢。onedir + tar.gz 已经足够「免安装」，单文件体验交给 AppImage。
+      - name: PyInstaller 打包
+        run: |
+          pyinstaller \
+            --noconfirm \
+            --clean \
+            --windowed \
+            --name "$APP_NAME" \
+            --icon packaging/icon.png \
+            --collect-all ssfconv \
+            --collect-submodules Cryptodome \
+            skin_installer.py
+
+      - name: 冒烟测试打包产物
+        run: |
+          PLUGINS=$(python -c "import PyQt5, os; print(os.path.join(os.path.dirname(PyQt5.__file__), 'Qt5', 'plugins', 'platforms'))")
+          QT_QPA_PLATFORM_PLUGIN_PATH="$PLUGINS" \
+          QT_QPA_PLATFORM=offscreen \
+          timeout 60 "./dist/$APP_NAME/$APP_NAME" --self-test
+
+      - name: 制作 tar.gz
+        run: |
+          # 桌面条目和图标放到 tarball 顶层，方便用户接入桌面菜单
+          cp packaging/${APP_NAME}.desktop "dist/$APP_NAME/"
+          cp packaging/icon.png "dist/$APP_NAME/${APP_NAME}.png"
+          cd dist
+          tar czf "${APP_NAME}-${{ steps.ver.outputs.version }}-linux-${{ matrix.arch }}.tar.gz" "$APP_NAME"
+
+      - name: 制作 AppImage
+        run: |
+          chmod +x packaging/build-appimage.sh
+          packaging/build-appimage.sh \
+            "dist/$APP_NAME" \
+            dist \
+            "${{ steps.ver.outputs.version }}"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-linux-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- 发布
+  release:
+    name: 发布 Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 列出产物
+        run: ls -lh artifacts
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "v${VERSION}" \
+            --generate-notes \
+            artifacts/*

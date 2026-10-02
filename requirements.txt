@@ -1,0 +1,9 @@
+# GUI 框架
+PyQt5>=5.15.9
+
+# ssfconv 的运行时依赖（.ssf 解密 / 图片重绘 / 数值计算）
+pycryptodomex>=3.19
+pillow>=10.0
+numpy>=1.24
+
+# 注意：ssfconv 本体未发布到 PyPI，需要单独安装，见 README「从源码运行」。
